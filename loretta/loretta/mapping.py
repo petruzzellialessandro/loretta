@@ -92,6 +92,7 @@ TRANSFORMERS_MODELS_TO_ADAPTER_TARGET_MODULES_MAPPING = {
     "llama": ["down_proj"],
     "opt": ["fc2"],
     "chatglm": ["dense_4h_to_h"],
+    "albert": ["pooler"],
 }
 
 TRANSFORMERS_MODELS_TO_PARALLEL_TARGET_MODULES_MAPPING = {
@@ -192,7 +193,7 @@ def _prepare_bottleneck_config(peft_config, model_config):
     
 
 
-def get_peft_model(model, peft_config):
+def get_peft_model(model, peft_config, decomposition):
     """
     Returns a Peft model object from a model and a config.
 
@@ -206,10 +207,10 @@ def get_peft_model(model, peft_config):
     if peft_config.task_type not in MODEL_TYPE_TO_PEFT_MODEL_MAPPING.keys():
         if peft_config.peft_type == "LORA":
             peft_config = _prepare_lora_config(peft_config, model_config)
-            return PeftModel(model, peft_config)
+            return PeftModel(model, peft_config, decomposition=decomposition)
         elif peft_config.peft_type == "BOTTLENECK":
             peft_config = _prepare_bottleneck_config(peft_config, model_config)
-            return PeftModel(model, peft_config)
+            return PeftModel(model, peft_config, decomposition=decomposition)
     if not isinstance(peft_config, PromptLearningConfig):
         if peft_config.peft_type == "BOTTLENECK":
             peft_config = _prepare_bottleneck_config(peft_config, model_config)
@@ -217,4 +218,4 @@ def get_peft_model(model, peft_config):
             peft_config = _prepare_lora_config(peft_config, model_config)
     else:
         peft_config = _prepare_prompt_learning_config(peft_config, model_config)
-    return MODEL_TYPE_TO_PEFT_MODEL_MAPPING[peft_config.task_type](model, peft_config)
+    return MODEL_TYPE_TO_PEFT_MODEL_MAPPING[peft_config.task_type](model, peft_config, decomposition=decomposition)

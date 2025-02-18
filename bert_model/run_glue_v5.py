@@ -58,7 +58,7 @@ class OurArguments(TrainingArguments):
     no_auto_device: bool = (
         False  # do not load model by auto device; should turn this on when using FSDP
     )
-    wandb_project: str = "camera-ready"
+    wandb_project: str = "lowRank"
     logging_dir: str = "./logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # parameter setup for PEFT methods
@@ -82,6 +82,7 @@ class OurArguments(TrainingArguments):
     adapter_size: int = 64
     tensor_shape_opt: int = 0
     report_to: str = "wandb"
+    decomposition: str = "TT"
 
 
 def get_parameter_number(net):
@@ -95,10 +96,11 @@ def get_parameter_number(net):
     total_num = sum(p.numel() for p in net.parameters()) / 1000 / 1000
     trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad) / 1000 / 1000
     wandb.log({"Total(M)": total_num, "Trainable(M)": trainable_num})
-    return {'Total(M)': total_num, 'Total Trainable(M)': trainable_num}
+    return {'Total(M)': total_num, 'Total Trainable(M)': trainable_num}, total_num, trainable_num
 
 
 def main():
+    to_save_dict = dict()
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurArguments))
     model_args, data_args, our_args = parser.parse_args_into_dataclasses()
     if (
@@ -110,10 +112,11 @@ def main():
         raise ValueError(
             f"Output directory ({our_args.output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
         )
-
+    print(our_args.decomposition)
+    print(our_args.per_device_train_batch_size)
     wandb_run_name = str(data_args.task_name) + '-' + str(model_args.model_name_or_path.replace('/', '-')) + '-' \
                      + str(our_args.learning_rate)  + '-' \
-                     + str(our_args.tuning_type) + '-lorar-' + str(our_args.tensor_rank) + '-' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                     + str(our_args.tuning_type) + '-lorar-' + str(our_args.tensor_rank) + str(our_args.decomposition) + '-' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     wandb.init(project=f"<{our_args.wandb_project}>", name=wandb_run_name)
     set_seed(our_args.seed)
     task_name_map = {
@@ -147,6 +150,9 @@ def main():
     )
 
     if our_args.tuning_type == 'loretta_rep':
+        import sys
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(r'/home/petruzzellia/apetruz/loretta/loretta/loretta'))
+        sys.path.append(os.path.dirname(SCRIPT_DIR))
         from loretta import LorettaRepConfig, get_peft_model, TaskType
         peft_config = LorettaRepConfig(
             r=our_args.rep_bottleneck,
@@ -157,8 +163,11 @@ def main():
             task_type=our_args.task_type,
             tensor_rank=our_args.tensor_rank
         )
-        model = get_peft_model(model, peft_config)
+        model = get_peft_model(model, peft_config, str(our_args.decomposition))
     if our_args.tuning_type == 'loretta_adp':
+        import sys
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(r'/home/petruzzellia/apetruz/loretta/loretta/loretta'))
+        sys.path.append(os.path.dirname(SCRIPT_DIR))
         from loretta import get_peft_model, LorettaAdpConfig, TaskType
         peft_config = LorettaAdpConfig(
             bottleneck_size=our_args.adp_bottleneck,
@@ -170,7 +179,7 @@ def main():
             task_type=our_args.task_type,
             tensor_rank=our_args.tensor_rank,
         )
-        model = get_peft_model(model, peft_config)
+        model = get_peft_model(model, peft_config, str(our_args.decomposition))
     if our_args.tuning_type == 'lora':
         from peft import get_peft_model, LoraConfig, TaskType
         peft_config = LoraConfig(task_type=TaskType.SEQ_CLS, inference_mode=False, r=our_args.tensor_rank,
@@ -223,14 +232,19 @@ def main():
         peft_config = PromptEncoderConfig(task_type="SEQ_CLS", num_virtual_tokens=100, encoder_hidden_size=128)
         model = get_peft_model(model, peft_config)
 
+    string_to_print, total, trainable = get_parameter_number(model)
     logger.info("Total Parameter Count: {}M".format(model.num_parameters() / 1000 / 1000))
-    logger.info("Total and trainable params: {}".format(str(get_parameter_number(model))))
+    logger.info("Total and trainable params: {}".format(str(string_to_print)))
+    to_save_dict['Total Params in M'] = model.num_parameters() / 1000 / 1000
+    to_save_dict['Tranable Params in M'] = trainable
 
-
+    print("Total Parameter Count: {}M".format(model.num_parameters() / 1000 / 1000))
+    print("Total and trainable params: {}".format(str(string_to_print)))
     # process the dataset
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     output_mode = glue_output_modes[data_args.task_name]
-    dataset = load_dataset("glue", data_args.task_name.replace("-", ""))
+    print("glue", data_args.task_name.replace("-", ""))
+    dataset = load_dataset("nyu-mll/glue", data_args.task_name.replace("-", ""))
     if data_args.task_name is not None:
         is_regression = data_args.task_name == "sts-b"
         if not is_regression:
@@ -341,13 +355,25 @@ def main():
     # Training
     model.eval()
     memory_used_after_part = torch.cuda.memory_allocated() - initial_memory_allocated
+    to_save_dict['Used Memory (in MB)'] = memory_used_after_part / (1024 ** 2)
+    logger.info("Used Memory: {} MB)".format(str(memory_used_after_part / (1024 ** 2))))
     print(f"Memory used after the specific part: {memory_used_after_part / (1024 ** 2)} MB")
     if our_args.do_train:
+        import time
+        start_time = time.time()
         trainer.train()
+        to_save_dict['Train Time (in s)'] = time.time() - start_time
+        logger.info("Train Time {} s)".format(str(to_save_dict['Train Time (in s)'])))
         trainer.save_model()
         if trainer.is_world_process_zero():
             tokenizer.save_pretrained(our_args.output_dir)
-
+    import json
+    with open(os.path.join(our_args.output_dir, "extra_info.json"), "w") as outfile: 
+        json.dump(to_save_dict, outfile)
+    import pickle
+    with open(os.path.join(our_args.output_dir, "configs.pkl"), 'wb') as handle:
+        pickle.dump([model_args, data_args, our_args], handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
     # Evaluation
     eval_results = {}
     if our_args.do_eval:

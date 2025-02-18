@@ -67,7 +67,7 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
         in the base model if `isinstance(self.peft_config, PromptLearningConfig)`.
     """
 
-    def __init__(self, model, peft_config: PeftConfig):
+    def __init__(self, model, peft_config: PeftConfig, **kargs):
         super().__init__()
         self.peft_config = peft_config
         self.base_model = model
@@ -77,9 +77,9 @@ class PeftModel(PushToHubMixin, torch.nn.Module):
             self._setup_prompt_encoder()
         else:
             if self.peft_config.peft_type == PeftType.LORA:
-                self.base_model = LorettaRepModel(peft_config, model)
+                self.base_model = LorettaRepModel(peft_config, model, **kargs)
             elif self.peft_config.peft_type == PeftType.BOTTLENECK:
-                self.base_model = LorettaAdpModel(peft_config, model)
+                self.base_model = LorettaAdpModel(peft_config, model, **kargs)
         if getattr(self.peft_config, "modules_to_save", None) is not None:
             self.modules_to_save = self.peft_config.modules_to_save
             _set_trainable(self)
@@ -347,8 +347,8 @@ class PeftModelForSequenceClassification(PeftModel):
         params: 370178 || all params: 108680450 || trainable%: 0.3406113979101117
     """
 
-    def __init__(self, model, peft_config: PeftConfig):
-        super().__init__(model, peft_config)
+    def __init__(self, model, peft_config: PeftConfig, decomposition):
+        super().__init__(model, peft_config, decomposition=decomposition)
         self.modules_to_save = ["classifier", "score"]
 
         for name, _ in self.base_model.named_children():
@@ -514,8 +514,8 @@ class PeftModelForCausalLM(PeftModel):
         params: 1843200 || all params: 775873280 || trainable%: 0.23756456724479544
     """
 
-    def __init__(self, model, peft_config: PeftConfig):
-        super().__init__(model, peft_config)
+    def __init__(self, model, peft_config: PeftConfig, decomposition):
+        super().__init__(model, peft_config, decomposition=decomposition)
         self.base_model_prepare_inputs_for_generation = self.base_model.prepare_inputs_for_generation
 
     def forward(
@@ -674,8 +674,8 @@ class PeftModelForSeq2SeqLM(PeftModel):
         params: 884736 || all params: 223843584 || trainable%: 0.3952474242013566
     """
 
-    def __init__(self, model, peft_config: PeftConfig):
-        super().__init__(model, peft_config)
+    def __init__(self, model, peft_config: PeftConfig, decomposition):
+        super().__init__(model, peft_config, decomposition=decomposition)
         self.base_model_prepare_inputs_for_generation = self.base_model.prepare_inputs_for_generation
         self.base_model_prepare_encoder_decoder_kwargs_for_generation = (
             self.base_model._prepare_encoder_decoder_kwargs_for_generation
@@ -845,8 +845,8 @@ class PeftModelForTokenClassification(PeftModel):
         params: 370178 || all params: 108680450 || trainable%: 0.3406113979101117
     """
 
-    def __init__(self, model, peft_config: PeftConfig):
-        super().__init__(model, peft_config)
+    def __init__(self, model, peft_config: PeftConfig, decomposition):
+        super().__init__(model, peft_config, decomposition=decomposition)
         self.modules_to_save = ["classifier", "score"]
 
         for name, _ in self.base_model.named_children():

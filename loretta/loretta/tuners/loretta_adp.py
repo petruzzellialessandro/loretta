@@ -1,6 +1,7 @@
 import importlib
 import math
 import re
+import imp
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import List, Optional, Union
@@ -9,7 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ..utils import PeftConfig, PeftType, config_class, TRANSFORMERS_HIDDEN_SIZE_TO_TENSOR_SHAPE, TaskType, TRANSFORMERS_HIDDEN_SIZE_TO_CLS_TENSOR_SHAPE
 from transformers.activations import ACT2FN
-from ..tensor_layers.layers import wrapped_linear_layers
 
 TRANSFORMERS_MODELS_TO_ADAPTER_TYPE_MAPPING = {
     "bloom": {"dense_h_to_4h": "mh_adapter", "dense_4h_to_h": "output_adapter"},
@@ -93,15 +93,24 @@ class LorettaAdpModel(torch.nn.Module):
 
     """
 
-    def __init__(self, config, model):
+    def __init__(self, config, model, decomposition):
         super().__init__()
+        print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAA", decomposition)
+        if decomposition == 'TT':
+            from ..tensor_layers.layers import wrapped_linear_layers
+        elif decomposition == 'CP':
+            from ..cp.layers import wrapped_linear_layers
+        else:
+            raise NotImplemented()
+        self.wrapped_linear_layers = wrapped_linear_layers
         self.model = model
         self.peft_config = config
         self._find_and_replace()
-        mark_adapter_layernorm_cls_trainable(self.model, self.peft_config.task_type, self.peft_config.tensor_rank, self.peft_config.bias)
+        mark_adapter_layernorm_cls_trainable(self.model, self.peft_config.task_type, self.peft_config.tensor_rank, self.peft_config.bias, wrapped_linear_layers)
         self.forward = self.model.forward
 
     def _find_and_replace(self):
+        wrapped_linear_layers = self.wrapped_linear_layers
         loaded_in_8bit = getattr(self.model, "is_loaded_in_8bit", False)
         if loaded_in_8bit and not is_bnb_available():
             raise ImportError(
@@ -153,11 +162,11 @@ class LorettaAdpModel(torch.nn.Module):
                 elif isinstance(target, torch.nn.Linear):
                     if adapter_type == "mh_adapter":
                         new_module = Linear(target.in_features, target.in_features,\
-                                            tensorized=self.peft_config.tensorized, bias=bias, tensor_rank=self.peft_config.tensor_rank, **kwargs)
+                                            tensorized=self.peft_config.tensorized, bias=bias, tensor_rank=self.peft_config.tensor_rank, wrapped_linear_layers=wrapped_linear_layers, **kwargs)
                     elif adapter_type == "output_adapter":
-                        new_module = Linear(target.out_features, target.out_features, tensorized=self.peft_config.tensorized, tensor_rank=self.peft_config.tensor_rank, bias=bias, **kwargs)
+                        new_module = Linear(target.out_features, target.out_features, tensorized=self.peft_config.tensorized, tensor_rank=self.peft_config.tensor_rank, wrapped_linear_layers=wrapped_linear_layers, bias=bias, **kwargs)
                     elif adapter_type == "parallel_adapter":
-                        new_module = Linear(target.in_features, target.out_features, bias=bias, **kwargs)
+                        new_module = Linear(target.in_features, target.out_features, bias=bias,  wrapped_linear_layers=wrapped_linear_layers, **kwargs)
                 self._replace_module(parent, target_name, new_module, target)
         if not is_target_modules_in_base_model:
             raise ValueError(
@@ -226,7 +235,7 @@ class LorettaAdpModel(torch.nn.Module):
 
 # Copy from lora.py
 # had to adapt it for `lora_only` to work 
-def mark_adapter_layernorm_cls_trainable(model: nn.Module, task_type, tensor_rank, bias: str = "none",) -> None:
+def mark_adapter_layernorm_cls_trainable(model: nn.Module, task_type, tensor_rank, bias: str = "none", wrapped_linear_layers = None) -> None:
     """
     Mark trainable part:
     - layernorm: trainable for all supported models
@@ -307,6 +316,7 @@ class Linear(nn.Linear, AdapterLayer):
         init_weights: str,
         tensorized: bool,
         tensor_rank: int,
+        wrapped_linear_layers,
         **kwargs,
     ):
         nn.Linear.__init__(self, in_features, out_features, **kwargs)

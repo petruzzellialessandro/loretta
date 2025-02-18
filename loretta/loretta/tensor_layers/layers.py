@@ -182,6 +182,3 @@ class TensorizedLinear_module(nn.Module):
             out = torch.tensordot(out, factors[i], [[-1], [0]])
         output = input_mat @ out.reshape(self.in_features, self.out_features)
         return output
-
-
-

@@ -86,13 +86,17 @@ class LorettaRepModel(torch.nn.Module):
 
     """
 
-    def __init__(self, config, model):
+    def __init__(self, config, model, decomposition='TT'):
         super().__init__()
         self.peft_config = config
         self.model = model
         self._find_and_replace()
         mark_lora_layernorm_cls_trainable(self.model, self.peft_config.task_type, self.peft_config.tensor_rank, self.peft_config.bias)
         self.forward = self.model.forward
+        if decomposition == 'TT':
+            from ..tensor_layers.layers import wrapped_linear_layers
+        elif decomposition == 'CP':
+            from ..cp.layers import wrapped_linear_layers
 
     def _find_and_replace(self):
         loaded_in_8bit = getattr(self.model, "is_loaded_in_8bit", False)
