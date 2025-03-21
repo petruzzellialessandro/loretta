@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.pytorch_utils import Conv1D
-from ..tensor_layers.layers import wrapped_linear_layers
 from ..utils import PeftConfig, PeftType, config_class, TRANSFORMERS_HIDDEN_SIZE_TO_TENSOR_SHAPE, transpose, TRANSFORMERS_HIDDEN_SIZE_TO_CLS_TENSOR_SHAPE
 
 
@@ -90,13 +89,16 @@ class LorettaRepModel(torch.nn.Module):
         super().__init__()
         self.peft_config = config
         self.model = model
+        self.decomposition = decomposition
         self._find_and_replace()
-        mark_lora_layernorm_cls_trainable(self.model, self.peft_config.task_type, self.peft_config.tensor_rank, self.peft_config.bias)
-        self.forward = self.model.forward
         if decomposition == 'TT':
             from ..tensor_layers.layers import wrapped_linear_layers
         elif decomposition == 'CP':
             from ..cp.layers import wrapped_linear_layers
+        else:
+            raise NotImplemented()
+        mark_lora_layernorm_cls_trainable(self.model, self.peft_config.task_type, self.peft_config.tensor_rank, self.peft_config.bias, wrapped_linear_layers=wrapped_linear_layers)
+        self.forward = self.model.forward
 
     def _find_and_replace(self):
         loaded_in_8bit = getattr(self.model, "is_loaded_in_8bit", False)
@@ -141,7 +143,7 @@ class LorettaRepModel(torch.nn.Module):
                         kwargs.update({"enable_lora": self.peft_config.enable_lora})
                         new_module = MergedLinear8bitLt(target.in_features, target.out_features, bias=bias, **kwargs)
                 elif isinstance(target, torch.nn.Linear) and self.peft_config.enable_lora is None:
-                    new_module = Linear(target.in_features, target.out_features, tensor_rank=self.peft_config.tensor_rank, bias=bias, **kwargs)
+                    new_module = Linear(target.in_features, target.out_features, tensor_rank=self.peft_config.tensor_rank, bias=bias, decomposition=self.decomposition, **kwargs)
                 elif self.peft_config.enable_lora is not None:
                     kwargs.update({"enable_lora": self.peft_config.enable_lora})
                     if isinstance(target, Conv1D):
@@ -156,7 +158,7 @@ class LorettaRepModel(torch.nn.Module):
                                 "Setting fan_in_fan_out to False."
                             )
                             kwargs["fan_in_fan_out"] = self.peft_config.fan_in_fan_out = False
-                    new_module = MergedLinear(in_features, out_features, tensor_rank=self.peft_config.tensor_rank, bias=bias, **kwargs)
+                    new_module = MergedLinear(in_features, out_features, tensor_rank=self.peft_config.tensor_rank, bias=bias, decomposition=self.decomposition, **kwargs)
                 self._replace_module(parent, target_name, new_module, target)
         if not is_target_modules_in_base_model:
             raise ValueError(
@@ -224,7 +226,7 @@ class LorettaRepModel(torch.nn.Module):
 
 
 # had to adapt it for `lora_only` to work
-def mark_lora_layernorm_cls_trainable(model: nn.Module, task_type, tensor_rank, bias: str = "none") -> None:
+def mark_lora_layernorm_cls_trainable(model: nn.Module, task_type, tensor_rank, bias: str = "none", wrapped_linear_layers=None) -> None:
     for n, p in model.named_parameters():
         if "lora_" not in n:
             p.requires_grad = False
@@ -291,11 +293,17 @@ class Linear(nn.Linear, LoraLayer):
         fan_in_fan_out: bool = False,  # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
         merge_weights: bool = True,
         tensor_rank: int = 8,
+        decomposition='TT',
         **kwargs,
     ):
         nn.Linear.__init__(self, in_features, out_features, **kwargs)
         LoraLayer.__init__(self, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
-
+        if decomposition == 'TT':
+            from ..tensor_layers.layers import wrapped_linear_layers
+        elif decomposition == 'CP':
+            from ..cp.layers import wrapped_linear_layers
+        else:
+            raise NotImplemented()
         self.fan_in_fan_out = fan_in_fan_out
         # Actual trainable parameters
         if r > 0:
@@ -388,8 +396,17 @@ class MergedLinear(nn.Linear, LoraLayer):
         fan_in_fan_out: bool = False,
         merge_weights: bool = True,
         tensor_rank: int = 8,
+        decomposition = 'TT',
         **kwargs,
     ):
+        if decomposition == 'TT':
+            from ..tensor_layers.layers import wrapped_linear_layers
+            print("TT in layer")
+        elif decomposition == 'CP':
+            from ..cp.layers import wrapped_linear_layers
+            print("CP in layer")
+        else:
+            raise NotImplemented()
         nn.Linear.__init__(self, in_features, out_features, **kwargs)
         LoraLayer.__init__(self, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
         if out_features % len(enable_lora) != 0:

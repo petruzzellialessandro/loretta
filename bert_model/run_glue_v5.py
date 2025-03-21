@@ -58,7 +58,7 @@ class OurArguments(TrainingArguments):
     no_auto_device: bool = (
         False  # do not load model by auto device; should turn this on when using FSDP
     )
-    wandb_project: str = "lowRank"
+    wandb_project: str = "lowRank_mrpc"
     logging_dir: str = "./logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # parameter setup for PEFT methods

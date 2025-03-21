@@ -28,8 +28,8 @@ source /home/petruzzellia/apetruz/loretta/.env/bin/activate
 python run_glue_v5.py \
   --data_dir=default \
   --logging_dir="$current_path/logs/$TASK-$BS-$LR-$MODEL_NAME-$MODE-${20}-$(date +"%Y%m%d%H%M%S")" \
-  --model_name_or_path=$MODEL --tokenizer_name=$MODEL --evaluation_strategy=steps --eval_steps=500 --logging_steps=50 \
-  --overwrite_output_dir --save_steps=10000 --task_name=$TASK --warmup_step=500 --learning_rate=$LR \
+  --model_name_or_path=$MODEL --tokenizer_name=$MODEL --evaluation_strategy=steps --eval_steps=10 --logging_steps=10 \
+  --overwrite_output_dir --save_steps=10000 --task_name=$TASK --warmup_step=10 --learning_rate=$LR \
   --num_train_epochs=$EPOCH --per_device_train_batch_size=$BS --output_dir="$current_pathd/$TASK-$DECOMPOSITION" --max_seq_length=128 \
   --tuning_type=$MODE --do_train --do_eval --tensor_rank=$RANK --decomposition=$DECOMPOSITION
 

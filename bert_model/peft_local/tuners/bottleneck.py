@@ -167,12 +167,18 @@ class BottleneckModel(torch.nn.Module):
                     elif adapter_type == "parallel_adapter":
                         new_module = Linear8bitLt(target.in_features, target.out_features, bias=bias, **kwargs)
                 elif isinstance(target, torch.nn.Linear):
+                    if self.peft_config == 'TT':
+                        from ..tensor_layers.layers import wrapped_linear_layers
+                    elif self.peft_config  == 'CP':
+                        from ..cp.layers import wrapped_linear_layers
+                    else:
+                        raise NotImplemented()
                     if adapter_type == "mh_adapter":
-                        new_module = Linear(target.in_features, target.in_features, bias=bias, **kwargs)
+                        new_module = Linear(target.in_features, target.in_features, bias=bias, wrapped_linear_layers = wrapped_linear_layers,**kwargs)
                     elif adapter_type == "output_adapter":
-                        new_module = Linear(target.out_features, target.out_features, bias=bias, **kwargs)
+                        new_module = Linear(target.out_features, target.out_features, bias=bias, wrapped_linear_layers=wrapped_linear_layers,**kwargs)
                     elif adapter_type == "parallel_adapter":
-                        new_module = Linear(target.in_features, target.out_features, bias=bias, **kwargs)
+                        new_module = Linear(target.in_features, target.out_features, bias=bias, wrapped_linear_layers=wrapped_linear_layers,**kwargs)
                 self._replace_module(parent, target_name, new_module, target)
         if not is_target_modules_in_base_model:
             raise ValueError(
@@ -293,6 +299,7 @@ class Linear(nn.Linear, AdapterLayer):
         adapter_dropout: float,
         scaling: Union[float, str],
         init_weights: str,
+        wrapped_linear_layers = None,
         **kwargs,
     ):
         nn.Linear.__init__(self, in_features, out_features, **kwargs)
